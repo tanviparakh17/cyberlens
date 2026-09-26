@@ -1,0 +1,9 @@
+streamlit
+scikit-learn
+pandas
+numpy
+tldextract
+joblib
+shap
+matplotlib
+plotly
