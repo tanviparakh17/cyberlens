@@ -9,3 +9,4 @@ matplotlib
 plotly
 fastapi
 uvicorn
+python-multipart

@@ -37,3 +37,10 @@ Why: agents/ = specialist AI modules, utils/ = shared helper functions,
 
 ### Step 7: Full pipeline tested — DONE
 - url_agent -> xai_agent -> report_agent chain verified working
+
+### Step 8: FastAPI backend (api.py) — DONE
+- Endpoint: POST /analyze/url
+- Input: {"url": "..."}
+- Output: verdict, confidence, features, SHAP top_features, full report
+- Tested successfully via Swagger UI (localhost:8000/docs) -- 200 OK
+- This is what the Flutter mobile app will call
