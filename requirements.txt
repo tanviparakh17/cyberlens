@@ -7,3 +7,5 @@ joblib
 shap
 matplotlib
 plotly
+fastapi
+uvicorn

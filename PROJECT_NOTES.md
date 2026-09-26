@@ -17,3 +17,16 @@ Why: agents/ = specialist AI modules, utils/ = shared helper functions,
 - Tranco se 1,000,000 legitimate domains mile (top-1m.csv)
 - Balanced sample banaya: 2000 phishing + 2000 safe = 4000 total URLs
 - Final training file: data/phishing_urls.csv (columns: url, label)
+
+### Step 4: Git/GitHub Setup — DONE
+- Repository: github.com/[username]/cyberlens
+- .gitignore added: venv, bade dataset CSVs, models excluded
+- Team collaborators added via GitHub Settings
+- Workflow: git add . -> git commit -m "message" -> git push
+
+
+### Team Onboarding Steps
+1. git clone [repo URL]
+2. cd cyberlens, python -m venv venv, activate, pip install -r requirements.txt
+3. Dataset files (phishing_site_urls.csv, top-1m.csv) share separately (Google Drive) -- not in Git due to size
+4. Future updates: git pull
