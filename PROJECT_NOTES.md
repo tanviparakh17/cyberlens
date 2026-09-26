@@ -30,3 +30,10 @@ Why: agents/ = specialist AI modules, utils/ = shared helper functions,
 2. cd cyberlens, python -m venv venv, activate, pip install -r requirements.txt
 3. Dataset files (phishing_site_urls.csv, top-1m.csv) share separately (Google Drive) -- not in Git due to size
 4. Future updates: git pull
+
+### Step 6: agents/xai_agent.py — DONE
+- SHAP TreeExplainer integrated with RandomForest model
+- Returns top 5 contributing features per prediction
+
+### Step 7: Full pipeline tested — DONE
+- url_agent -> xai_agent -> report_agent chain verified working

@@ -34,7 +34,7 @@ def extract_url_features(url: str) -> dict:
         "has_at_symbol": int("@" in url),
         "has_ip_address": int(bool(re.match(
             r"^(\d{1,3}\.){3}\d{1,3}$", hostname))),
-        "uses_https": int(parsed.scheme == "https"),
+        #"uses_https": int(parsed.scheme == "https"),
         "num_subdomains": max(ext.subdomain.count(".") + 1, 0)
             if ext.subdomain else 0,
         "has_suspicious_keyword": int(
