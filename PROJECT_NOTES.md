@@ -44,3 +44,10 @@ Why: agents/ = specialist AI modules, utils/ = shared helper functions,
 - Output: verdict, confidence, features, SHAP top_features, full report
 - Tested successfully via Swagger UI (localhost:8000/docs) -- 200 OK
 - This is what the Flutter mobile app will call
+
+### Step 9: Backend deployed to Render.com — DONE
+- Live URL: https://cyberlens-api.onrender.com (apna exact URL likh)
+- Endpoint: POST /analyze/url
+- Swagger docs: /docs
+- Free tier note: inactive rehne pe 50+ sec delay pehle request pe
+  (cold start) -- normal hai, paid tier mein nahi hota
