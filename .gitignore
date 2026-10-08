@@ -4,3 +4,8 @@ __pycache__/
 *.pyc
 .vscode/
 *.joblib
+data/phishing_site_urls.csv
+data/top-1m.csv
+models/*.joblib
+venv/
+__pycache__/
