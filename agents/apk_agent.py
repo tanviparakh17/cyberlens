@@ -14,12 +14,14 @@ Analyzes Android APK files using Androguard and extracts:
 Usage:
     python -m agents.apk_agent "path\\to\\file.apk"
 """
-
+import sys
 import hashlib
 import os
-import sys
 
 from androguard.misc import AnalyzeAPK
+from loguru import logger
+logger.remove()
+logger.add(sys.stderr, level="WARNING")
 
 
 # Permissions that can be useful as indicators during APK analysis.
@@ -223,6 +225,8 @@ def analyze_apk(apk_path):
     # ---------------------------------------------------------
     # Standardized CyberLens result
     # ---------------------------------------------------------
+
+    risk_score, verdict, evidence, contributions = score_permissions(permissions)
 
     result = {
         "agent": "apk",
