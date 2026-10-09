@@ -5,14 +5,36 @@ from sklearn.ensemble import RandomForestClassifier   # ML algorithm jo hum use 
 from sklearn.model_selection import train_test_split  # data ko train/test mein baantne ke liye
 from sklearn.metrics import accuracy_score, classification_report  # model ki performance check karne ke liye
 
-from utils.feature_extraction import extract_url_features  # humara feature-extraction function import kiya
-
+ # humara feature-extraction function import kiya
+from utils.feature_extraction import extract_url_features, get_registered_domain
 # Model file kahan save/load hogi -- agents folder ke ek level upar, models/ folder mein
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "models", "url_model.joblib")
 
 # Real dataset kahan se load hogi (prepare_data.py se bani final file)
 DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "phishing_urls.csv")
 
+from functools import lru_cache
+
+TRUSTED_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "trusted_domains.txt")
+
+
+@lru_cache(maxsize=1)
+def _load_trusted() -> frozenset:
+    if not os.path.exists(TRUSTED_PATH):
+        return frozenset()
+    with open(TRUSTED_PATH) as f:
+        return frozenset(line.strip() for line in f if line.strip())
+
+
+def _rule_override(features: dict):
+    """Strong signals pe ML ko override karta hai. (verdict, reason) ya None."""
+    if features["has_ip_address"] and features["has_suspicious_keyword"]:
+        return "phishing", "IP address host + suspicious keyword"
+    if features["brand_impersonation"] or features["homoglyph_brand"]:
+        return "phishing", "brand name impersonation in domain/subdomain"
+    if features["suspicious_tld"] and features["has_suspicious_keyword"]:
+        return "phishing", "suspicious TLD + suspicious keyword"
+    return None
 
 def load_training_data() -> pd.DataFrame:
     """
@@ -91,13 +113,26 @@ def predict(url: str) -> dict:
     X = pd.DataFrame([features])[feature_names]
 
     proba = clf.predict_proba(X)[0]
-    pred_label = clf.predict(X)[0]
+    pred_label = int(clf.predict(X)[0])
+    verdict = "phishing" if pred_label == 1 else "safe"
     confidence = float(proba[pred_label])
+    source, reason = "ml", None
+
+    override = _rule_override(features)
+    if override:
+        verdict, reason = override
+        confidence = max(float(proba[1]), 0.85)
+        source = "rule"
+    elif get_registered_domain(url) in _load_trusted() and not features["has_ip_address"]:
+        verdict, confidence = "safe", max(float(proba[0]), 0.95)
+        source, reason = "allowlist", "domain in trusted top-10k list"
 
     return {
         "url": url,
-        "verdict": "phishing" if pred_label == 1 else "safe",
+        "verdict": verdict,
         "confidence": round(confidence, 3),
+        "source": source,
+        "reason": reason,
         "features": features,
         "model": clf,
         "feature_row": X,

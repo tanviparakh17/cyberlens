@@ -20,6 +20,11 @@ CHECKS = [
     ("http://secure-hdfc.in/login/update?id=8842", "phishing"),
     ("http://192.168.4.7/bank/signin.php", "phishing"),
     ("http://wellsfarg0-alert.net/verify/account.php", "phishing"),
+    ("https://stackoverflow.com/questions/12345/how-to-parse-json", "safe"),
+("https://www.hdfcbank.com/personal/pay/cards", "safe"),
+("https://accounts.google.com/signin/v2/identifier", "safe"),
+("http://sbi-kyc-update.top/login", "phishing"),
+("http://micros0ft-support-alert.com/verify", "phishing"),
 ]
 
 ok = 0

@@ -65,10 +65,33 @@ def make_safe_url(domain: str) -> str:
     return "https://" + sub + domain + path
 
 
-safe_only = pd.DataFrame({
-    "url": [make_safe_url(d) for d in tranco_df["domain"].astype(str)],
-    "label": 0   # 0 = safe
+# ---- SAFE URLs: asli "good" URLs (Kaggle) + thode modern domains (Tranco) ----
+# Pehle sab safe URLs Tranco domains se khud bane the aur bahut chhote the (max 76 chars),
+# jabki asli good URLs 1000+ chars tak jaate hain. Isse model ne "lamba URL = phishing"
+# seekh liya. Ab zyada tar safe URLs wahi source se lete hain jahan se phishing aaye
+# (same era, asli paths), aur Tranco wale modern domains thode se milate hain.
+N_REAL_SAFE = 1400
+N_SYNTH_SAFE = 600
+
+good_df = phishing_df[phishing_df["label"] == "good"][["url"]].copy()
+good_df["url"] = good_df["url"].apply(
+    lambda u: u if u.startswith(("http://", "https://")) else "http://" + u
+)
+good_df["host"] = (good_df["url"].str.replace(r"^https?://", "", regex=True)
+                   .str.split("/").str[0].str.lower())
+good_df = good_df[good_df["host"].str.contains(".", regex=False)]   # junk rows hatao
+# Ek domain se zyada se zyada 2 URLs, taaki 1-2 badi sites poora data na bhar dein
+good_df = (good_df.sample(frac=1, random_state=42)
+           .groupby("host").head(2).drop(columns="host"))
+real_safe = good_df.sample(n=min(len(good_df), N_REAL_SAFE), random_state=42).copy()
+real_safe["label"] = 0
+
+synth_safe = pd.DataFrame({
+    "url": [make_safe_url(d) for d in tranco_df["domain"].astype(str).head(N_SYNTH_SAFE)],
+    "label": 0
 })
+safe_only = pd.concat([real_safe, synth_safe], ignore_index=True)
+
 
 print(f"Safe URLs found: {len(safe_only)}")
 
