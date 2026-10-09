@@ -1,19 +1,20 @@
 import os
 import tempfile
+import traceback
 from datetime import datetime
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# Sirf wahi agents top-level pe import hote hain jinki dependencies hamesha installed hain.
-# qr (opencv), account (training data) aur apk (androguard) endpoint ke andar lazily import
-# hote hain, taaki kisi ek agent ki dikkat poori API ko startup pe hi na gira de.
+# Only agents whose dependencies are always installed are imported at the top level.
+# qr (opencv), account (training data) and apk (androguard) are imported lazily inside
+# their endpoints, so a problem with one agent can't bring the whole API down at startup.
 from agents import url_agent, email_agent, xai_agent, report_agent
 
 app = FastAPI(title="CyberLens API", version="3.0")
 
-# allow_origins=["*"] matlab kisi bhi jagah se request accept hogi (development ke liye theek hai)
+# allow_origins=["*"] means requests are accepted from anywhere (fine for development)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,14 +22,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Ye verdicts "khatre wale" maane jaate hain -- risk_score isi se calculate hota hai
+# These verdicts are treated as "dangerous" -- risk_score is calculated from this
 RISKY_VERDICTS = {"phishing", "malicious", "suspicious"}
 
-MAX_EMAIL_CHARS = 20000              # bahut lamba text aaye to server dheema na ho
+MAX_EMAIL_CHARS = 20000              # very long text shouldn't slow the server down
 MAX_QR_BYTES = 5 * 1024 * 1024       # QR image max 5 MB
-MAX_APK_BYTES = 25 * 1024 * 1024     # APK max 25 MB (free-tier memory ko dhyan mein rakh ke)
+MAX_APK_BYTES = 25 * 1024 * 1024     # APK max 25 MB (keeps the free-tier memory in mind)
 
-# Account-takeover demo: agent ke apne out-of-sample demo logs, ek fixed "end_time" ke saath
+# Account-takeover demo: the agent's own out-of-sample demo logs, with a fixed "end_time"
 ATO_DEMO_END = "2026-10-01T00:00:00"
 ATO_SCENARIOS = {
     "quiet_normal": "Ordinary month of chatting with friends",
@@ -51,16 +52,16 @@ class AccountRequest(BaseModel):
 
 
 def _pct(confidence: float) -> int:
-    """Confidence ko whole-number percent banata hai, bilkul report ke text jaisa
-    (taaki app ke banner aur report mein 97% vs 96% ka farak na aaye)."""
+    """Turns confidence into a whole-number percent, exactly like the report text
+    (so the app banner and the report never disagree, e.g. 97% vs 96%)."""
     return int(f"{confidence:.0%}"[:-1])
 
 
 def build_response(agent: str, kind: str, result: dict, extra: dict = None) -> dict:
     """
-    Kisi bhi ML agent ke result (jisme 'model' aur 'feature_row' ho) ko
-    SHAP explanation + report ke saath ek common JSON format mein badalta hai.
-    Isse Flutter app mein har agent ke liye ek hi result screen chal sakti hai.
+    Turns any ML agent's result (containing 'model' and 'feature_row') into a common
+    JSON format with a SHAP explanation and a report.
+    This lets the Flutter app use a single result screen for every agent.
     """
     xai_result = xai_agent.explain(result)
     report_text = report_agent.generate_report(result, xai_result, kind=kind)
@@ -74,7 +75,7 @@ def build_response(agent: str, kind: str, result: dict, extra: dict = None) -> d
         "verdict": result["verdict"],
         "confidence": confidence,
         "confidence_pct": _pct(confidence),
-        "risk_score": risk_score,               # 0 = bilkul safe, 100 = bahut risky
+        "risk_score": risk_score,               # 0 = completely safe, 100 = very risky
         "top_features": xai_result["top_features"],
         "explanation_type": "shap",
         "report": report_text,
@@ -85,21 +86,21 @@ def build_response(agent: str, kind: str, result: dict, extra: dict = None) -> d
 
 
 def _read_upload(file: UploadFile, max_bytes: int, what: str) -> bytes:
-    """Upload ko memory mein padhta hai, size limit ke saath."""
+    """Reads an upload into memory, with a size limit."""
     data = file.file.read(max_bytes + 1)
     if not data:
-        raise HTTPException(status_code=400, detail=f"{what} khaali hai.")
+        raise HTTPException(status_code=400, detail=f"{what} is empty.")
     if len(data) > max_bytes:
         raise HTTPException(
             status_code=413,
-            detail=f"{what} bahut badi hai (max {max_bytes // (1024 * 1024)} MB).",
+            detail=f"{what} is too large (max {max_bytes // (1024 * 1024)} MB).",
         )
     return data
 
 
 @app.get("/")
 def health_check():
-    """Simple endpoint check karne ke liye ki API zinda hai ya nahi."""
+    """Simple endpoint to check that the API is alive."""
     return {
         "status": "CyberLens API is running",
         "endpoints": [
@@ -115,7 +116,7 @@ def analyze_url(request: URLRequest):
     """URL -> ML prediction -> SHAP explanation -> Report"""
     url = request.url.strip()
     if not url:
-        raise HTTPException(status_code=400, detail="URL khaali hai.")
+        raise HTTPException(status_code=400, detail="URL is empty.")
     result = url_agent.predict(url)
     return build_response("url", "url", result,
                           {"url": result["url"], "features": result["features"]})
@@ -127,9 +128,9 @@ def analyze_email(request: EmailRequest):
     """Email text -> TF-IDF + heuristics -> SHAP explanation -> Report"""
     text = request.text.strip()[:MAX_EMAIL_CHARS]
     if len(text) < 10:
-        raise HTTPException(status_code=400, detail="Email text bahut chhota hai. Poora email paste karo.")
+        raise HTTPException(status_code=400, detail="Email text is too short. Paste the full email.")
     result = email_agent.predict(text)
-    # 50 tfidf word-columns UI ke kaam ke nahi, sirf heuristic features bhejte hain
+    # The 50 tfidf word-columns aren't useful for the UI, so we only send the heuristic features
     heuristics = {k: v for k, v in result["features"].items() if not k.startswith("tfidf_")}
     return build_response("email", "email", result, {"features": heuristics})
 
@@ -140,25 +141,25 @@ def analyze_qr(file: UploadFile = File(...)):
     """QR image -> decode (OpenCV) -> URL agent -> SHAP explanation -> Report"""
     data = _read_upload(file, MAX_QR_BYTES, "Image")
     try:
-        from agents import qr_agent          # cv2 yahin load hoga
+        from agents import qr_agent          # cv2 is loaded here
     except ImportError:
-        raise HTTPException(status_code=503, detail="QR module server par installed nahi hai (opencv).")
+        raise HTTPException(status_code=503, detail="QR module is not installed on the server (opencv).")
 
-    # qr_agent file PATH leta hai, bytes nahi -- isliye temp file banate hain
+    # qr_agent takes a file PATH, not bytes -- so we write a temp file
     with tempfile.TemporaryDirectory() as tmp:
-        path = os.path.join(tmp, "upload.png")   # OpenCV extension nahi, content dekhta hai
+        path = os.path.join(tmp, "upload.png")   # OpenCV looks at the content, not the extension
         with open(path, "wb") as f:
             f.write(data)
         try:
             result = qr_agent.predict(path)
         except ValueError:
-            raise HTTPException(status_code=400, detail="Image padhi nahi ja saki. PNG ya JPG bhejo.")
+            raise HTTPException(status_code=400, detail="Could not read the image. Please send a PNG or JPG.")
 
     if result["verdict"] == "unknown":
-        # qr_agent is case mein model=None deta hai, SHAP chalega hi nahi
-        raise HTTPException(status_code=422, detail="Is image mein QR code nahi mila. Saaf, seedhi photo lo.")
+        # In this case qr_agent returns model=None, so SHAP can't run
+        raise HTTPException(status_code=422, detail="No QR code found in this image. Take a clear, straight-on photo.")
 
-    # QR ka result asal mein URL ka result hai, isliye report ke liye kind="url"
+    # The QR result is really a URL result, so the report kind is "url"
     return build_response("qr", "url", result, {
         "url": result["url"],
         "decoded_url": result["decoded_url"],
@@ -168,7 +169,7 @@ def analyze_qr(file: UploadFile = File(...)):
 
 # ------------------------------------------------------------ ACCOUNT
 def _ensure_ato_model(ato):
-    """url/email agent ki tarah ye agent khud train nahi karta -- model nahi ho to yahin train karte hain."""
+    """Unlike the url/email agents, this agent doesn't train itself -- if the model is missing, we train it here."""
     if ato.MODEL_PATH.exists():
         return
     try:
@@ -176,19 +177,19 @@ def _ensure_ato_model(ato):
     except FileNotFoundError:
         raise HTTPException(
             status_code=503,
-            detail="Account-takeover model ya training data server par nahi hai.",
+            detail="Account-takeover model or training data is not available on the server.",
         )
 
 
 @app.get("/analyze/account/scenarios")
 def account_scenarios():
-    """Flutter dropdown ke liye demo scenarios ki list."""
+    """List of demo scenarios for the Flutter dropdown."""
     return {"scenarios": [{"id": k, "description": v} for k, v in ATO_SCENARIOS.items()]}
 
 
 @app.post("/analyze/account")
 def analyze_account(request: AccountRequest):
-    """Demo scenario ke simulated message logs -> graph features -> SHAP -> Report"""
+    """Simulated message logs for a demo scenario -> graph features -> SHAP -> Report"""
     scenario = request.scenario.strip()
     if scenario not in ATO_SCENARIOS:
         raise HTTPException(status_code=400, detail=f"Unknown scenario. Options: {list(ATO_SCENARIOS)}")
@@ -234,14 +235,14 @@ def _apk_report_text(result: dict, risk_pct: int, top_features: list) -> str:
 @app.post("/analyze/apk")
 def analyze_apk_endpoint(file: UploadFile = File(...)):
     """APK upload -> Androguard permission analysis -> rule-based risk score -> Report.
-    Is agent mein ML model nahi hai, isliye SHAP nahi -- 'explanation_type' = heuristic."""
+    This agent has no ML model, so no SHAP -- 'explanation_type' = heuristic."""
     if not (file.filename or "").lower().endswith(".apk"):
-        raise HTTPException(status_code=400, detail="Sirf .apk file bhejo.")
+        raise HTTPException(status_code=400, detail="Please upload an .apk file only.")
     data = _read_upload(file, MAX_APK_BYTES, "APK")
     try:
-        from agents import apk_agent         # androguard yahin load hoga
+        from agents import apk_agent         # androguard is loaded here
     except ImportError:
-        raise HTTPException(status_code=503, detail="APK module server par installed nahi hai (androguard).")
+        raise HTTPException(status_code=503, detail="APK module is not installed on the server (androguard).")
 
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "upload.apk")
@@ -249,18 +250,22 @@ def analyze_apk_endpoint(file: UploadFile = File(...)):
             f.write(data)
         try:
             result = apk_agent.analyze_apk(path)
-        except Exception:
-            raise HTTPException(status_code=422, detail="Ye APK padhi nahi ja saki (corrupt ya unsupported).")
+        except Exception as exc:
+            traceback.print_exc()        # the real traceback shows up in Render's Logs
+            raise HTTPException(
+                status_code=422,
+                detail=f"This APK could not be read ({type(exc).__name__}: {str(exc)[:200]})",
+            )
 
     risk_pct = round(result["risk_score"] * 100)
-    contributions = result.get("contributions", [])   # apk_scoring_patch.py lagane ke baad bharta hai
+    contributions = result.get("contributions", [])   # filled in after applying apk_scoring_patch.py
     top_features = [[name, weight] for name, weight in
                     sorted(contributions, key=lambda c: -abs(c[1]))[:5]]
 
     return {
         "agent": "apk",
         "verdict": result["verdict"],
-        "confidence": None,                  # heuristic hai, probability nahi
+        "confidence": None,                  # it's a heuristic, not a probability
         "confidence_pct": None,
         "risk_score": risk_pct,
         "top_features": top_features,
