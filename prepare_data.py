@@ -1,5 +1,9 @@
 import pandas as pd
+import random
 import os
+
+# Fixed seed taaki har baar same dataset bane (result reproducible rahe)
+rng = random.Random(42)
 
 print("Loading phishing dataset...")
 phishing_df = pd.read_csv("data/phishing_site_urls.csv")
@@ -11,10 +15,7 @@ phishing_df = phishing_df.rename(columns={"URL": "url", "Label": "label"})
 phishing_only = phishing_df[phishing_df["label"] == "bad"][["url"]].copy()
 phishing_only["label"] = 1   # 1 = phishing
 
-# ---- FIX: URLs ko normalize karo -- raw Kaggle URLs mein http/https
-# prefix nahi hota, jabki humare safe URLs mein hamesha hota hai.
-# Bina isko fix kiye, "scheme hai ya nahi" khud ek fake signal ban jaata hai
-# (num_redirect_chars feature ismein accidentally leak ho raha tha)
+# Raw Kaggle URLs mein http/https prefix nahi hota -- consistency ke liye add karo
 phishing_only["url"] = phishing_only["url"].apply(
     lambda u: u if u.startswith(("http://", "https://")) else "http://" + u
 )
@@ -25,12 +26,47 @@ print("Loading Tranco top sites (legitimate domains)...")
 # Tranco list mein header nahi hota, format: rank,domain
 tranco_df = pd.read_csv("data/top-1m.csv", header=None, names=["rank", "domain"])
 
-# Poori 1M list se random sample lo (sirf top-ranked famous sites nahi),
-# taaki chhoti/lesser-known legitimate sites bhi represent hon
+# Poori 1M list se random sample lo (sirf top-ranked famous sites nahi)
 tranco_df = tranco_df.sample(n=50000, random_state=42)
 
+
+# ---- FIX: safe URLs ko realistic banao ----
+# Pehle safe URLs sirf "https://domain.com" hote the (na www., na path), jabki asli
+# websites ke links mein www., subdomain aur path normal hote hain. Isse model ne
+# galat seekh liya tha ki "subdomain ya path hai = phishing" (www.wikipedia.org bhi
+# phishing dikh raha tha). Ab har safe domain ko asli jaisa structure dete hain.
+PLAIN_PATHS = [
+    "/", "/about", "/contact", "/products", "/products/12345",
+    "/blog/how-to-get-started", "/careers", "/help/faq", "/docs/getting-started",
+    "/en/pricing", "/news/2024/05/update", "/search?q=shoes", "/store/item/48213",
+]
+# Kuch asli safe URLs mein "login"/"account" jaise words hote hain -- thode se
+# examples rakhte hain taaki ye words akele phishing ka shortcut na ban jaayein
+KEYWORD_PATHS = ["/login", "/signin?next=/dashboard", "/account/settings", "/secure/checkout"]
+OTHER_SUBDOMAINS = ["blog.", "docs.", "support.", "api.", "shop."]
+
+
+def make_safe_url(domain: str) -> str:
+    r = rng.random()
+    if r < 0.55:
+        sub = ""                               # 55%: seedha domain
+    elif r < 0.85:
+        sub = "www."                           # 30%: www.
+    else:
+        sub = rng.choice(OTHER_SUBDOMAINS)     # 15%: blog., docs. jaisa subdomain
+
+    r = rng.random()
+    if r < 0.40:
+        path = ""                              # 40%: koi path nahi
+    elif r < 0.94:
+        path = rng.choice(PLAIN_PATHS)         # 54%: normal path
+    else:
+        path = rng.choice(KEYWORD_PATHS)       # 6%: login/account jaisa path
+    return "https://" + sub + domain + path
+
+
 safe_only = pd.DataFrame({
-    "url": "https://" + tranco_df["domain"].astype(str),
+    "url": [make_safe_url(d) for d in tranco_df["domain"].astype(str)],
     "label": 0   # 0 = safe
 })
 
@@ -50,7 +86,7 @@ hard_safe_urls = pd.DataFrame({
     "label": 0
 })
 
-# Hard POSITIVES: phishing URLs jo "safe jaisi" dikhti hain (chotی, clean)
+# Hard POSITIVES: phishing URLs jo "safe jaisi" dikhti hain (chhoti, clean)
 hard_phishing_urls = pd.DataFrame({
     "url": [
         "http://amaz0n-verify.com",
