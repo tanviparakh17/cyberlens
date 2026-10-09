@@ -10,3 +10,6 @@ plotly
 fastapi
 uvicorn
 python-multipart
+networkx
+androguard==4.1.4
+opencv-python-headless==5.0.0.93

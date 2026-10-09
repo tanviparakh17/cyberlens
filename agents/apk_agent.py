@@ -61,6 +61,79 @@ def calculate_sha256(file_path):
 
     return sha256.hexdigest()
 
+PERMISSION_WEIGHTS = {
+    "android.permission.READ_SMS": 0.10,
+    "android.permission.RECEIVE_SMS": 0.10,
+    "android.permission.SEND_SMS": 0.12,
+    "android.permission.READ_CONTACTS": 0.05,
+    "android.permission.WRITE_CONTACTS": 0.03,
+    "android.permission.READ_CALL_LOG": 0.08,
+    "android.permission.WRITE_CALL_LOG": 0.05,
+    "android.permission.RECORD_AUDIO": 0.05,
+    "android.permission.CAMERA": 0.02,
+    "android.permission.ACCESS_FINE_LOCATION": 0.02,
+    "android.permission.ACCESS_COARSE_LOCATION": 0.01,
+    "android.permission.READ_PHONE_STATE": 0.03,
+    "android.permission.CALL_PHONE": 0.04,
+    "android.permission.READ_EXTERNAL_STORAGE": 0.02,
+    "android.permission.WRITE_EXTERNAL_STORAGE": 0.02,
+    "android.permission.REQUEST_INSTALL_PACKAGES": 0.10,
+    "android.permission.SYSTEM_ALERT_WINDOW": 0.10,
+    "android.permission.RECEIVE_BOOT_COMPLETED": 0.03,
+}
+ 
+SMS_READ_PERMISSIONS = {"android.permission.READ_SMS", "android.permission.RECEIVE_SMS"}
+ 
+SUSPICIOUS_THRESHOLD = 0.30
+ 
+ 
+def score_permissions(permissions):
+    """
+    Returns (risk_score 0-1, verdict, evidence list, contributions list).
+    contributions = [(label, weight), ...] -- app ka "top factors" chart isi se banta hai.
+    """
+    perms = set(permissions)
+    score = 0.0
+    contributions = []
+    evidence = []
+ 
+    # 1) Har sensitive permission ka chhota weight
+    found = [p for p in PERMISSION_WEIGHTS if p in perms]
+    for p in found:
+        score += PERMISSION_WEIGHTS[p]
+        contributions.append((p.replace("android.permission.", ""), PERMISSION_WEIGHTS[p]))
+    if found:
+        evidence.append(f"{len(found)} sensitive permission(s) requested.")
+ 
+    # 2) Khatarnak combinations
+    sms_combo = bool(perms & SMS_READ_PERMISSIONS) and "android.permission.SEND_SMS" in perms
+    dropper_combo = (
+        "android.permission.SYSTEM_ALERT_WINDOW" in perms
+        and "android.permission.REQUEST_INSTALL_PACKAGES" in perms
+    )
+    if sms_combo:
+        score += 0.25
+        contributions.append(("COMBO: SMS read + send", 0.25))
+        evidence.append("Can read and send SMS together - common in OTP-theft / SMS-fraud malware.")
+    if dropper_combo:
+        score += 0.25
+        contributions.append(("COMBO: screen overlay + install apps", 0.25))
+        evidence.append("Can draw over other apps and install packages - common in dropper / banking-trojan behaviour.")
+ 
+    score = min(score, 1.0)
+ 
+    # 3) Verdict -- "malicious" sirf jab dono combo families ek saath ho
+    if sms_combo and dropper_combo:
+        verdict = "malicious"
+    elif score >= SUSPICIOUS_THRESHOLD:
+        verdict = "suspicious"
+    else:
+        verdict = "safe"
+ 
+    if not evidence:
+        evidence.append("No strong indicators were detected by the permission checks.")
+ 
+    return round(score, 3), verdict, evidence, contributions
 
 def analyze_apk(apk_path):
     """
@@ -148,58 +221,6 @@ def analyze_apk(apk_path):
     sha256 = calculate_sha256(apk_path)
 
     # ---------------------------------------------------------
-    # Basic heuristic risk scoring
-    # ---------------------------------------------------------
-
-    risk_score = 0.0
-    evidence = []
-
-    # Risk from suspicious permissions
-    permission_score = min(len(risky_permissions) * 0.08, 0.40)
-
-    if risky_permissions:
-        risk_score += permission_score
-
-        evidence.append(
-            f"{len(risky_permissions)} potentially sensitive permission(s) detected."
-        )
-
-    # Risk from very large number of permissions
-    if len(permissions) >= 20:
-        risk_score += 0.15
-
-        evidence.append(
-            f"APK requests a relatively large number of permissions ({len(permissions)})."
-        )
-
-    # Risk from large method count
-    if len(method_names) >= 5000:
-        risk_score += 0.15
-
-        evidence.append(
-            f"APK contains a large number of methods ({len(method_names)})."
-        )
-
-    # Cap score
-    risk_score = min(risk_score, 1.0)
-
-    # ---------------------------------------------------------
-    # Verdict
-    # ---------------------------------------------------------
-
-    if risk_score >= 0.70:
-        verdict = "malicious"
-    elif risk_score >= 0.35:
-        verdict = "suspicious"
-    else:
-        verdict = "safe"
-
-    if not evidence:
-        evidence.append(
-            "No strong indicators were detected by the current heuristic checks."
-        )
-
-    # ---------------------------------------------------------
     # Standardized CyberLens result
     # ---------------------------------------------------------
 
@@ -227,6 +248,7 @@ def analyze_apk(apk_path):
         "sha256": sha256,
 
         "evidence": evidence,
+        "contributions": contributions,
     }
 
     return result
