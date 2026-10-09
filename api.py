@@ -215,9 +215,21 @@ def _apk_report_text(result: dict, risk_pct: int, top_features: list) -> str:
         "safe": "No strong indicators were found by the permission checks. This is not a guarantee - install apps only from trusted sources.",
     }
     factors = "\n".join(
-        f"- {name}: increased risk (weight {weight:.3f})" for name, weight in top_features
+        f"- {name}: {'increased' if weight > 0 else 'decreased'} risk ({weight:+.3f})"
+        for name, weight in top_features
     ) or "- No sensitive permission patterns found"
     evidence = "\n".join(f"- {e}" for e in result["evidence"])
+    method = (
+        "RandomForest malware probability, explained with SHAP"
+        if result["explanation_type"] == "shap"
+        else "rule-based heuristic (SHAP unavailable)"
+    )
+    caveat = ""
+    if result["model_source"].startswith("synthetic"):
+        caveat = (
+            "\nNote: the model was trained on synthetic permission profiles, "
+            "not real malware samples, so treat this score as indicative only.\n"
+        )
     return (
         "CyberLens APK Report\n"
         f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
@@ -225,8 +237,10 @@ def _apk_report_text(result: dict, risk_pct: int, top_features: list) -> str:
         f"Package: {result.get('package_name') or 'unknown'}\n"
         f"SHA-256: {result['sha256']}\n"
         f"Verdict: {result['verdict'].upper()}\n"
-        f"Risk score: {risk_pct}/100 (rule-based heuristic, not an ML probability)\n\n"
-        f"Key Contributing Factors:\n{factors}\n\n"
+        f"Risk score: {risk_pct}/100 ({method})\n"
+        f"Model training data: {result['model_source']}\n"
+        f"{caveat}\n"
+        f"Key Contributing Factors (permissions requested by this APK):\n{factors}\n\n"
         f"Evidence:\n{evidence}\n\n"
         f"Recommended Action:\n{actions[result['verdict']]}"
     ).strip()
@@ -234,8 +248,7 @@ def _apk_report_text(result: dict, risk_pct: int, top_features: list) -> str:
 
 @app.post("/analyze/apk")
 def analyze_apk_endpoint(file: UploadFile = File(...)):
-    """APK upload -> Androguard permission analysis -> rule-based risk score -> Report.
-    This agent has no ML model, so no SHAP -- 'explanation_type' = heuristic."""
+    """APK upload -> Androguard permission analysis -> RandomForest + SHAP -> Report."""
     if not (file.filename or "").lower().endswith(".apk"):
         raise HTTPException(status_code=400, detail="Please upload an .apk file only.")
     data = _read_upload(file, MAX_APK_BYTES, "APK")
@@ -258,18 +271,17 @@ def analyze_apk_endpoint(file: UploadFile = File(...)):
             )
 
     risk_pct = round(result["risk_score"] * 100)
-    contributions = result.get("contributions", [])   # filled in after applying apk_scoring_patch.py
-    top_features = [[name, weight] for name, weight in
-                    sorted(contributions, key=lambda c: -abs(c[1]))[:5]]
+    top_features = result["top_features"]
 
     return {
         "agent": "apk",
         "verdict": result["verdict"],
-        "confidence": None,                  # it's a heuristic, not a probability
-        "confidence_pct": None,
+        "confidence": result["confidence"],
+        "confidence_pct": _pct(result["confidence"]),
         "risk_score": risk_pct,
         "top_features": top_features,
-        "explanation_type": "heuristic",
+        "explanation_type": result["explanation_type"],   # "shap" (or "heuristic" if SHAP failed)
+        "model_source": result["model_source"],
         "package_name": result.get("package_name"),
         "app_name": result.get("app_name"),
         "sha256": result["sha256"],
