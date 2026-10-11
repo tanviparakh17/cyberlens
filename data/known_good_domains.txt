@@ -1,0 +1,3 @@
+# Extra domains you personally trust. One registered domain per line.
+# These are treated as safe unless a strong phishing rule fires (e.g. IP host).
+rcoem.in   # college website

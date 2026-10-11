@@ -1,33 +1,56 @@
-import os                                    # file paths handle karne ke liye
-import joblib                                # trained model ko save/load karne ke liye
-import pandas as pd                          # data ko table (DataFrame) format mein rakhne ke liye
-from sklearn.ensemble import RandomForestClassifier   # ML algorithm jo hum use kar rahe hain
-from sklearn.model_selection import train_test_split  # data ko train/test mein baantne ke liye
-from sklearn.metrics import accuracy_score, classification_report  # model ki performance check karne ke liye
-
- # humara feature-extraction function import kiya
-from utils.feature_extraction import extract_url_features, get_registered_domain
-# Model file kahan save/load hogi -- agents folder ke ek level upar, models/ folder mein
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "models", "url_model.joblib")
-
-# Real dataset kahan se load hogi (prepare_data.py se bani final file)
-DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "phishing_urls.csv")
-
+import os
 from functools import lru_cache
+from urllib.parse import urlparse
 
-TRUSTED_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "trusted_domains.txt")
+import joblib
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, classification_report
+from sklearn.model_selection import train_test_split
+
+from utils.feature_extraction import OFFICIAL_DOMAINS, extract_url_features, get_registered_domain
+
+BASE_DIR = os.path.join(os.path.dirname(__file__), "..")
+
+# Where the trained model is saved/loaded (models/ folder, one level above agents/)
+MODEL_PATH = os.path.join(BASE_DIR, "models", "url_model.joblib")
+
+# Training data created by prepare_data.py (columns "url" and "label": 0 = safe, 1 = phishing)
+DATA_PATH = os.path.join(BASE_DIR, "data", "phishing_urls.csv")
+
+# Allowlists: the generated top-10k list, plus an optional hand-written list
+TRUSTED_PATH = os.path.join(BASE_DIR, "data", "trusted_domains.txt")
+KNOWN_GOOD_PATH = os.path.join(BASE_DIR, "data", "known_good_domains.txt")
+
+# When the model alone says "phishing" with less confidence than this,
+# the verdict is "suspicious" (the model is unsure) instead of "phishing".
+SUSPICIOUS_BELOW = 0.70
+
+
+def _read_domain_file(path: str) -> set:
+    """One registered domain per line; blank lines and '#' comments are ignored."""
+    if not os.path.exists(path):
+        return set()
+    domains = set()
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.split("#", 1)[0].strip().lower()
+            if line:
+                domains.add(line)
+    return domains
 
 
 @lru_cache(maxsize=1)
 def _load_trusted() -> frozenset:
-    if not os.path.exists(TRUSTED_PATH):
-        return frozenset()
-    with open(TRUSTED_PATH) as f:
-        return frozenset(line.strip() for line in f if line.strip())
+    return frozenset(
+        _read_domain_file(TRUSTED_PATH)
+        | _read_domain_file(KNOWN_GOOD_PATH)
+        | set(OFFICIAL_DOMAINS)
+    )
 
 
 def _rule_override(features: dict):
-    """Strong signals pe ML ko override karta hai. (verdict, reason) ya None."""
+    """Strong signals override the ML model. Returns (verdict, reason) or None."""
     if features["has_ip_address"] and features["has_suspicious_keyword"]:
         return "phishing", "IP address host + suspicious keyword"
     if features["brand_impersonation"] or features["homoglyph_brand"]:
@@ -36,11 +59,34 @@ def _rule_override(features: dict):
         return "phishing", "suspicious TLD + suspicious keyword"
     return None
 
+
+def _decide(proba, features: dict, is_trusted: bool):
+    """
+    Combines the ML probabilities, the rules and the allowlist.
+    proba = [P(safe), P(phishing)]. Returns (verdict, confidence, source, reason).
+    """
+    pred_label = 1 if proba[1] >= proba[0] else 0
+    verdict = "phishing" if pred_label == 1 else "safe"
+    confidence = float(proba[pred_label])
+    source, reason = "ml", None
+
+    override = _rule_override(features)
+    if override:
+        verdict, reason = override
+        confidence = max(float(proba[1]), 0.85)
+        source = "rule"
+    elif is_trusted and not features["has_ip_address"]:
+        verdict, confidence = "safe", max(float(proba[0]), 0.95)
+        source, reason = "allowlist", "domain in trusted list"
+    elif verdict == "phishing" and confidence < SUSPICIOUS_BELOW:
+        verdict = "suspicious"
+        reason = f"model is unsure ({confidence:.0%} phishing)"
+
+    return verdict, confidence, source, reason
+
+
 def load_training_data() -> pd.DataFrame:
-    """
-    prepare_data.py se generate hui final dataset (data/phishing_urls.csv) load karta hai.
-    Ye file mein already columns "url" aur "label" hain (0=safe, 1=phishing).
-    """
+    """Loads data/phishing_urls.csv, created by prepare_data.py."""
     if not os.path.exists(DATA_PATH):
         raise FileNotFoundError(
             f"Dataset not found at {DATA_PATH}. "
@@ -48,26 +94,24 @@ def load_training_data() -> pd.DataFrame:
         )
 
     df = pd.read_csv(DATA_PATH)
-    print(f"✅ Loaded {len(df)} URLs "
+    print(f"Loaded {len(df)} URLs "
           f"({(df['label'] == 1).sum()} phishing, {(df['label'] == 0).sum()} safe)")
 
     return df[["url", "label"]]
 
 
-from sklearn.model_selection import train_test_split, cross_val_score
-from urllib.parse import urlparse
-
 def get_domain(url):
     try:
         return urlparse(url if "://" in url else "http://" + url).hostname
-    except:
+    except Exception:
         return url
+
 
 def train():
     df = load_training_data()
     df["domain"] = df["url"].apply(get_domain)
 
-    # ---- Domain-based split: ek domain sirf train YA test mein aayega, dono mein nahi ----
+    # Domain-based split: a domain appears in train OR test, never both
     unique_domains = list(df["domain"].unique())
     train_domains, test_domains = train_test_split(
         unique_domains, test_size=0.3, random_state=42
@@ -113,19 +157,8 @@ def predict(url: str) -> dict:
     X = pd.DataFrame([features])[feature_names]
 
     proba = clf.predict_proba(X)[0]
-    pred_label = int(clf.predict(X)[0])
-    verdict = "phishing" if pred_label == 1 else "safe"
-    confidence = float(proba[pred_label])
-    source, reason = "ml", None
-
-    override = _rule_override(features)
-    if override:
-        verdict, reason = override
-        confidence = max(float(proba[1]), 0.85)
-        source = "rule"
-    elif get_registered_domain(url) in _load_trusted() and not features["has_ip_address"]:
-        verdict, confidence = "safe", max(float(proba[0]), 0.95)
-        source, reason = "allowlist", "domain in trusted top-10k list"
+    is_trusted = get_registered_domain(url) in _load_trusted()
+    verdict, confidence, source, reason = _decide(proba, features, is_trusted)
 
     return {
         "url": url,

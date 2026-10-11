@@ -232,7 +232,7 @@ def _apk_report_text(result: dict, risk_pct: int, top_features: list) -> str:
         )
     return (
         "CyberLens APK Report\n"
-        f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+        f"Generated: {report_agent.now_ist()}\n\n"
         f"App: {result.get('app_name') or 'unknown'}\n"
         f"Package: {result.get('package_name') or 'unknown'}\n"
         f"SHA-256: {result['sha256']}\n"

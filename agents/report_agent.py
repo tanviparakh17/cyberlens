@@ -1,9 +1,18 @@
-from datetime import datetime   # current time/date nikaalne ke liye
+from datetime import datetime, timedelta, timezone
 
-# Jin verdicts ko "khatre wala" maana jaata hai (koi bhi agent ho)
+# Verdicts that count as "dangerous" (any agent)
 RISKY_VERDICTS = {"phishing", "malicious", "suspicious"}
 
-# Har agent type ke liye: input ka label, aur risky / safe hone par recommended action
+# The server (Render) runs in UTC, so report times are converted to Indian time.
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def now_ist() -> str:
+    """Current time as 'YYYY-MM-DD HH:MM IST'."""
+    return datetime.now(IST).strftime("%Y-%m-%d %H:%M") + " IST"
+
+
+# For every agent type: the input label, and the recommended action when risky / safe
 KINDS = {
     "url": {
         "label": "URL Analyzed",
@@ -29,9 +38,9 @@ KINDS = {
 
 
 def _subject(result: dict, kind: str) -> str:
-    """Report mein dikhane ke liye input ka chhota sa text nikaalta hai."""
+    """Short text describing the analyzed input, shown in the report."""
     if kind == "email":
-        text = " ".join(str(result.get("email_text", "")).split())   # extra spaces/newlines hatao
+        text = " ".join(str(result.get("email_text", "")).split())   # collapse extra spaces/newlines
         return text[:150] + ("..." if len(text) > 150 else "")
     if kind == "qr":
         return result.get("decoded_url") or "(no link found)"
@@ -41,7 +50,7 @@ def _subject(result: dict, kind: str) -> str:
 
 
 def _nice(name: str) -> str:
-    """Feature ka naam readable banata hai (email ke tfidf_ features ke liye bhi)."""
+    """Makes a feature name readable (also handles the email model's tfidf_ features)."""
     if name.startswith("tfidf_"):
         return f'word "{name[6:]}"'
     return name.replace("_", " ")
@@ -60,7 +69,7 @@ def generate_report(result: dict, xai_result: dict, kind: str = "url") -> str:
     action = info["risky"] if verdict in RISKY_VERDICTS else info["safe"]
 
     report = f"""CyberLens Threat Report
-Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+Generated: {now_ist()}
 
 {info['label']}: {_subject(result, kind)}
 Verdict: {verdict.upper()}
