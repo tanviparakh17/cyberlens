@@ -23,6 +23,10 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 
+try:
+    from androguard.core.apk import APK              # androguard 4.x
+except ImportError:
+    from androguard.core.bytecodes.apk import APK    # older androguard 3.x
 from androguard.misc import AnalyzeAPK
 from loguru import logger
 logger.remove()
@@ -321,7 +325,7 @@ def predict_permissions(permissions):
     return probability, verdict, top_features, explanation_type, bundle["training_data"]
 
 
-def analyze_apk(apk_path):
+def analyze_apk(apk_path, deep=False):
     """
     Analyze an Android APK and return a structured CyberLens result.
     """
@@ -335,7 +339,10 @@ def analyze_apk(apk_path):
     print(f"[APK Agent] Analyzing: {apk_path}")
 
     # Androguard analysis
-    apk, dex_objects, analysis = AnalyzeAPK(apk_path)
+    if deep:
+        apk, dex_objects, analysis = AnalyzeAPK(apk_path)   # full code analysis: slow, uses a lot of memory
+    else:
+        apk, dex_objects = APK(apk_path), []                # manifest only: enough for permissions, far less memory
 
     # ---------------------------------------------------------
     # Basic APK information
@@ -440,8 +447,8 @@ def analyze_apk(apk_path):
         "permissions": permissions,
         "risky_permissions": risky_permissions,
 
-        "class_count": len(class_names),
-        "method_count": len(method_names),
+        "class_count": len(class_names) if deep else None,
+        "method_count": len(method_names) if deep else None,
 
         # Keep the result manageable.
         "classes": class_names[:100],
@@ -524,7 +531,7 @@ def main():
     apk_path = sys.argv[1]
 
     try:
-        result = analyze_apk(apk_path)
+        result = analyze_apk(apk_path, deep=True)
         print_result(result)
 
     except Exception as error:
