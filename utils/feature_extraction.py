@@ -1,4 +1,6 @@
+import math
 import re
+from collections import Counter
 from urllib.parse import urlparse
 import tldextract
 
@@ -61,8 +63,42 @@ def _find_brand(text: str) -> str:
     return ""
 
 
-def extract_url_features(url: str) -> dict:
+def _entropy(text: str) -> float:
+    """How random-looking a string is (random domains and paths score high)."""
+    if not text:
+        return 0.0
+    counts, n = Counter(text), len(text)
+    return -sum(c / n * math.log2(c / n) for c in counts.values())
+
+
+def _extra_features(url: str) -> dict:
+    """URL-shape features (path, query, randomness) that were chosen by url_experiment.py."""
     parsed = urlparse(url if "://" in url else "http://" + url)
+    host = parsed.hostname or ""
+    path = parsed.path or ""
+    query = parsed.query or ""
+    labels = [part for part in host.split(".") if part]
+    return {
+        "path_depth": len([s for s in path.split("/") if s]),
+        "path_length": len(path),
+        "query_length": len(query),
+        "num_query_params": (query.count("&") + 1) if query else 0,
+        "digit_ratio": sum(c.isdigit() for c in url) / max(len(url), 1),
+        "host_digit_ratio": sum(c.isdigit() for c in host) / max(len(host), 1),
+        "host_entropy": _entropy(host),
+        "path_entropy": _entropy(path),
+        "longest_host_label": max((len(label) for label in labels), default=0),
+        "path_special_ratio": (sum(not c.isalnum() for c in path) / len(path)) if path else 0.0,
+    }
+
+
+def extract_url_features(url: str) -> dict:
+    try:
+        parsed = urlparse(url if "://" in url else "http://" + url)
+    except ValueError:
+        # malformed URL, for example an unmatched "[" that looks like an IPv6 address
+        cleaned = (url if "://" in url else "http://" + url).replace("[", "").replace("]", "")
+        parsed = urlparse(cleaned)
     ext = _tld_extractor(url)
     hostname = parsed.hostname or ""
     domain = ext.domain.lower()
@@ -102,11 +138,9 @@ def extract_url_features(url: str) -> dict:
         domain_hyphens = ext_plain.domain.count("-")
 
     features = {
-        "url_length": len(url),
         "hostname_length": len(hostname),
         "num_dots": url.count("."),
         "num_hyphens": url.count("-"),
-        "num_digits": sum(c.isdigit() for c in url),
         "has_at_symbol": int("@" in url),
         "has_ip_address": int(has_ip),
         # "uses_https": int(parsed.scheme == "https"),
@@ -127,6 +161,8 @@ def extract_url_features(url: str) -> dict:
         "suspicious_tld": suspicious_tld,
         "domain_has_leet": domain_has_leet,
         "domain_hyphens": domain_hyphens,
+        # URL-shape features (chosen by the experiment)
+        **_extra_features(url),
     }
     return features
 
@@ -134,3 +170,17 @@ def get_registered_domain(url: str) -> str:
     """example: https://docs.python.org/3/ -> python.org"""
     ext = _tld_extractor(_raw_hostname(url).lower())
     return f"{ext.domain}.{ext.suffix}" if ext.suffix else ext.domain
+
+# ---- Safe urlparse -------------------------------------------------------------
+# A malformed URL (for example one with an unmatched "[") makes the standard urlparse
+# raise ValueError. Every call above looks the name up when it runs, so replacing it
+# here makes the whole module safe. The brackets are removed and parsing is retried.
+_standard_urlparse = urlparse
+
+
+def urlparse(url, *args, **kwargs):  # noqa: F811 (deliberately replaces the import above)
+    try:
+        return _standard_urlparse(url, *args, **kwargs)
+    except ValueError:
+        cleaned = str(url).replace("[", "").replace("]", "")
+        return _standard_urlparse(cleaned, *args, **kwargs)
