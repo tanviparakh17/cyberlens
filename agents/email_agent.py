@@ -81,7 +81,7 @@ def train():
     train_df, test_df = train_test_split(df, test_size=0.2, random_state=42, stratify=df["label"])
     
     # Fit TF-IDF on top vocabulary terms to maintain SHAP performance and readability
-    vectorizer = TfidfVectorizer(max_features=50, stop_words="english")
+    vectorizer = TfidfVectorizer(max_features=150, stop_words="english")
     vectorizer.fit(train_df["text"].fillna(""))
     
     # Build train feature matrix
